@@ -1,107 +1,123 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 import 'dart:async';
 import 'dart:isolate';
 
 void main() {
-  runApp(MyApp());
+  runApp(ThreadApp());
 }
 
-class MyApp extends StatelessWidget {
-  // This widget is the root of your application.
+class ThreadApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Flutter Demo',
-      theme: ThemeData(
-        primarySwatch: Colors.blue,
-        visualDensity: VisualDensity.adaptivePlatformDensity,
-      ),
-      home: MyHomePage(title: 'Flutter Demo Home Page'),
+      title: 'Thread App',
+      home: AppPage(),
     );
   }
 }
 
-class MyHomePage extends StatefulWidget {
-  MyHomePage({Key key, this.title}) : super(key: key);
-  final String title;
+class AppPage extends StatefulWidget {
+  AppPage({Key key}) : super(key: key);
 
   @override
-  _MyHomePageState createState() => _MyHomePageState();
+  _AppPageState createState() => _AppPageState();
 }
 
-class _MyHomePageState extends State<MyHomePage> {
-  Isolate _isolate;
-  bool _running = false;
-  static int _counter = 0;
-  String notification = "";
-  ReceivePort _receivePort;
+class _AppPageState extends State<AppPage> {
+  List widgets = [];
 
-  void _start() async {
-    _running = true;
-    _receivePort = ReceivePort();
-
-    // _checkTimer é a função assíncrona que vai rodar na thread separada
-    // nesse momento a thread já é aberta e a função começa a rodar em paralelo
-    _isolate = await Isolate.spawn(_checkTimer, _receivePort.sendPort);
-
-    // o _handleMessage é chamado toda vez que a função (_checkTimer) chama o sendPort.send(data);
-    // quando chama o _receivePort.close() aí cai no onDone
-    _receivePort.listen(_handleMessage, onDone: () {
-      print("done!");
-    });
+  @override
+  void initState() {
+    super.initState();
+    loadData();
   }
 
-  static void _checkTimer(SendPort sendPort) async {
-    Timer.periodic(new Duration(seconds: 1), (Timer t) {
-      _counter++;
-      String msg = 'notification ' + _counter.toString();
-      print('SEND: ' + msg);
-
-      // esse send manda pra função passada, no caso o _handleMessage(dynamic data)
-      sendPort.send(msg);
-    });
-  }
-
-  void _handleMessage(dynamic data) {
-    print('RECEIVED: ' + data);
-    setState(() {
-      notification = data;
-    });
-  }
-
-  void _stop() {
-    if (_isolate != null) {
-      setState(() {
-        _running = false;
-        notification = '';
-      });
-      _receivePort.close();
-      _isolate.kill(priority: Isolate.immediate);
-      _isolate = null;
+  showLoadingDialog() {
+    if (widgets.length == 0) {
+      return true;
     }
+    return false;
+  }
+
+  getBody() {
+    if (showLoadingDialog()) {
+      return getProgressDialog();
+    } else {
+      return getListView();
+    }
+  }
+
+  getProgressDialog() {
+    return Center(child: CircularProgressIndicator());
   }
 
   @override
   Widget build(BuildContext context) {
-    return new Scaffold(
-      appBar: new AppBar(
-        title: new Text(widget.title),
-      ),
-      body: new Center(
-        child: new Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: <Widget>[
-            new Text(
-              notification,
-            ),
-          ],
+    return Scaffold(
+        appBar: AppBar(
+          title: Text("Thread App"),
         ),
-      ),
-      floatingActionButton: new FloatingActionButton(
-        onPressed: _running ? _stop : _start,
-        tooltip: _running ? 'Timer stop' : 'Timer start',
-        child: _running ? new Icon(Icons.stop) : new Icon(Icons.play_arrow),
-      ),
-    );
+        body: getBody());
+  }
+
+  ListView getListView() => ListView.builder(
+      itemCount: widgets.length,
+      itemBuilder: (BuildContext context, int position) {
+        return getRow(position);
+      });
+
+  Widget getRow(int i) {
+    return Padding(padding: EdgeInsets.all(10.0), child: Text("Row ${widgets[i]["title"]}"));
+  }
+
+  loadData() async {
+    // Abre a porta para receber a porta de comunicação dentro do Isolate
+    ReceivePort receiveIsolatePort = ReceivePort();
+    // Cria o Isolate com o metodo e a porta criada anteriormente
+    await Isolate.spawn(dataLoader, receiveIsolatePort.sendPort);
+
+    // Guarda a porta enviada pelo Isolate
+    // Fica aguardando a porta pelo sendPort.send(port.sendPort);
+    SendPort sendToIsolatePort = await receiveIsolatePort.first;
+
+    // Envia a requisição com o link para o Isolate baixar o json
+    List msg = await sendReceiveToIsolate(sendToIsolatePort, "https://jsonplaceholder.typicode.com/posts");
+
+    // Exibi os dados baixados
+    setState(() {
+      widgets = msg;
+    });
+  }
+
+  // O metodo do Isolate
+  static dataLoader(SendPort sendPort) async {
+    // Abre a porta para receber as requisições
+    ReceivePort port = ReceivePort();
+
+    // Envia para a main thread a porta
+    sendPort.send(port.sendPort);
+
+    // Espera receber a requisição do sendReceive(SendPort port, link)
+    await for (var msg in port) {
+      // Link do json
+      String data = msg[0];
+      // Porta para retornar
+      SendPort replyTo = msg[1];
+
+      http.Response response = await http.get(data);
+      // Envia a resposta do http de volta para a main 
+      replyTo.send(json.decode(response.body));
+    }
+  }
+
+  Future sendReceiveToIsolate(SendPort port, link) {
+    // Abre uma porta para receber a resposta da requisição
+    ReceivePort response = ReceivePort();
+    // Envia para o Isolate o link e a porta de resposta
+    port.send([link, response.sendPort]);
+    return response.first;
   }
 }
+

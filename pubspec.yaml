@@ -30,6 +30,8 @@ dependencies:
   cupertino_icons: ^1.0.0
   # lib to work with isolates
   flutter_isolate: ^1.0.0+14
+  # lib to do http request
+  http: ^0.12.2
 
 dev_dependencies:
   flutter_test:
